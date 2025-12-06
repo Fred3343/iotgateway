@@ -16,6 +16,8 @@
 
 		<ApplicationIcon>wwwroot\favicon.ico</ApplicationIcon>
 		<!--<PlatformTarget>x86</PlatformTarget>-->
+		
+		<GenerateSatelliteAssembliesForCore>true</GenerateSatelliteAssembliesForCore>
 	</PropertyGroup>
 
 
