@@ -18,6 +18,7 @@
 		<ProjectReference Include="..\..\IoTGateway.DataAccess\IoTGateway.DataAccess.csproj" />
 		<ProjectReference Include="..\..\IoTGateway.Model\IoTGateway.Model.csproj" />
 		<ProjectReference Include="..\Drivers\PLC.ModBusMaster\PLC.ModBusMaster.csproj" />
+		<ProjectReference Include="..\Drivers\DLT645-2007\DLT645-2007.csproj" />
 	</ItemGroup>
 
 </Project>

@@ -9,6 +9,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using MQTTnet.AspNetCore;
+using MQTTnet.Server;
 using Plugin;
 using System;
 using System.Collections.Generic;
@@ -77,15 +78,23 @@ namespace IoTGateway
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
-        public void Configure(IApplicationBuilder app, IOptionsMonitor<Configs> configs)
+        public void Configure(IApplicationBuilder app,IOptionsMonitor<Configs> configs,MqttConnectionHandler mqttHandler)
         {
+            // ★ 关键补丁：防止 MQTTnet.AspNetCore.MqttConnectionHandler 中 _serverOptions 为空
+            // 先用默认配置手工调用一次 StartAsync，把 _serverOptions 填上，
+            // 后面 HostedMqttServer 启动时还会再调用一次 StartAsync，把真正的配置覆盖进去。
+            mqttHandler
+                .StartAsync(new MqttServerOptionsBuilder().Build(), logger: null)
+                .GetAwaiter()
+                .GetResult();
+
+            // 下面保持你原来的中间件顺序不变
             IconFontsHelper.GenerateIconFont();
+
             app.UseExceptionHandler(configs.CurrentValue.ErrorHandler);
-            app.UseStaticFiles(new StaticFileOptions()
-            {
-                ServeUnknownFileTypes = true
-            });
+            app.UseStaticFiles(new StaticFileOptions() { ServeUnknownFileTypes = true });
             app.UseWtmStaticFiles();
+
             app.UseRouting();
             app.UseWtmMultiLanguages();
             app.UseWtmCrossDomain();
@@ -97,20 +106,16 @@ namespace IoTGateway
 
             app.UseEndpoints(endpoints =>
             {
-                //MCP
-                app.UseEndpoints(endpoints =>
-                {
-                    endpoints.MapMcp(); //
-                });
-                //MqttServer
-                app.UseEndpoints(endpoints =>
-                {
-                    endpoints.MapMqtt("/mqtt");
-                });
+                // MCP
+                endpoints.MapMcp();
+
+                // MQTT
+                endpoints.MapMqtt("/mqtt");
 
                 endpoints.MapControllerRoute(
-                   name: "areaRoute",
-                   pattern: "{area:exists}/{controller=Home}/{action=Index}/{id?}");
+                    name: "areaRoute",
+                    pattern: "{area:exists}/{controller=Home}/{action=Index}/{id?}");
+
                 endpoints.MapControllerRoute(
                     name: "default",
                     pattern: "{controller=Home}/{action=Index}/{id?}");
@@ -119,6 +124,7 @@ namespace IoTGateway
             app.UseWtmContext();
             app.UseMqttServer();
         }
+
 
         /// <summary>
         /// Wtm will call this function to dynamiclly set connection string
