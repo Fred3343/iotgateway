@@ -14,7 +14,7 @@ namespace Meter.Dlt645
     [DriverSupported("DLT645")]
     [DriverSupported("DLT645-2007")]
     [DriverSupported("DLT645-1997")]
-    [DriverInfo("Dlt645", "V1.0.2", "Copyright YourCompany 202412")]
+    [DriverInfo("Dlt645", "V1.0.4", "Copyright YourCompany 202412")]
     public class DeviceDlt645 : IDriver
     {
         public ILogger _logger { get; set; }
@@ -84,7 +84,7 @@ namespace Meter.Dlt645
 
             var sb = new StringBuilder(8);
             foreach (var b in diBytes)
-                sb.AppendFormat("{0:X2}", b); // 例如 00 03 01 02 → "00030102"
+                sb.AppendFormat("{0:X2}", b); // 00 03 01 02 → "00030102"
 
             var key = sb.ToString();
             return DiDecimalMap.TryGetValue(key, out var places) ? places : 0;
@@ -139,11 +139,60 @@ namespace Meter.Dlt645
         [ConfigParameter("规约版本(2007/1997)")]
         public string ProtocolVersion { get; set; } = "2007";
 
+        /// <summary>
+        /// 日志级别控制：Trace/Information/Warning/Error/None
+        /// 只输出 >= 该级别 的日志
+        /// </summary>
+        [ConfigParameter("日志级别(Debug/Information/Warning/Error/None)")]
+        public LogLevel LogLevelSetting { get; set; } = LogLevel.Information;
+
         [ConfigParameter("超时时间ms")]
         public int Timeout { get; set; } = 1000;
 
         [ConfigParameter("最小通讯周期ms")]
         public uint MinPeriod { get; set; } = 3000;
+
+        #endregion
+
+        #region 日志包装
+
+        private bool IsLevelEnabled(LogLevel level)
+        {
+            if (_logger == null) return false;
+            if (LogLevelSetting == LogLevel.None) return false;
+            if (level < LogLevelSetting) return false;
+            return _logger.IsEnabled(level);
+        }
+
+        private void LogDebug(string message)
+        {
+            if (IsLevelEnabled(LogLevel.Debug))
+                _logger.LogDebug(message);
+        }
+
+        private void LogInfo(string message)
+        {
+            if (IsLevelEnabled(LogLevel.Information))
+                _logger.LogInformation(message);
+        }
+
+        private void LogWarn(string message)
+        {
+            if (IsLevelEnabled(LogLevel.Warning))
+                _logger.LogWarning(message);
+        }
+
+        private void LogError(string message)
+        {
+            if (IsLevelEnabled(LogLevel.Error))
+                _logger.LogError(message);
+        }
+
+        private void LogError(Exception ex, string message)
+        {
+            if (IsLevelEnabled(LogLevel.Error))
+                _logger.LogError(ex, message);
+        }
 
         #endregion
 
@@ -155,7 +204,7 @@ namespace Meter.Dlt645
             _logger = logger;
 
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-            _logger.LogInformation($"Device:[{_device}],Create()");
+            LogInfo($"Device:[{_device}],Create()");
         }
 
         /// <summary>
@@ -183,7 +232,7 @@ namespace Meter.Dlt645
             {
                 try
                 {
-                    _logger.LogInformation($"Device:[{_device}],Connect()");
+                    LogInfo($"Device:[{_device}],Connect()");
 
                     CloseInternal();
 
@@ -226,11 +275,12 @@ namespace Meter.Dlt645
                         _netStream.WriteTimeout = Timeout;
                     }
 
+                    LogInfo($"Device:[{_device}],Connect() Success={IsConnected}");
                     return IsConnected;
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, $"Device:[{_device}],Connect(),Error");
+                    LogError(ex, $"Device:[{_device}],Connect(),Error");
                     CloseInternal();
                     return false;
                 }
@@ -246,13 +296,14 @@ namespace Meter.Dlt645
             {
                 try
                 {
-                    _logger.LogInformation($"Device:[{_device}],Close()");
+                    LogInfo($"Device:[{_device}],Close()");
                     CloseInternal();
+                    LogInfo($"Device:[{_device}],Close() Success={!IsConnected}");
                     return !IsConnected;
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, $"Device:[{_device}],Close(),Error");
+                    LogError(ex, $"Device:[{_device}],Close(),Error");
                     return false;
                 }
             }
@@ -293,13 +344,13 @@ namespace Meter.Dlt645
         {
             try
             {
-                _logger.LogInformation($"Device:[{_device}],Dispose()");
+                LogInfo($"Device:[{_device}],Dispose()");
                 CloseInternal();
                 GC.SuppressFinalize(this);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Device:[{_device}],Dispose(),Error");
+                LogError(ex, $"Device:[{_device}],Dispose(),Error");
             }
         }
 
@@ -386,6 +437,8 @@ namespace Meter.Dlt645
                 if ((respCtrl & 0xF0) == 0xD0)
                 {
                     byte errCode = decodedData.Length > 0 ? decodedData[0] : (byte)0xFF;
+                    string diReq = BitConverter.ToString(diBytes).Replace("-", "");
+                    LogWarn($"Device:[{_device}] DLT645 异常应答: Ctrl=0x{respCtrl:X2}, ErrCode=0x{errCode:X2}, DI={diReq}");
                     ret.StatusType = VaribaleStatusTypeEnum.Bad;
                     ret.Message = $"电表返回异常应答: Ctrl=0x{respCtrl:X2}, ErrCode=0x{errCode:X2}";
                     return ret;
@@ -403,13 +456,12 @@ namespace Meter.Dlt645
                 var dataBytes = decodedData.Skip(4).ToArray();
 
                 string diKey = BitConverter.ToString(respDi).Replace("-", "");
-                _logger?.LogInformation(
-                    $"Device:[{_device}] DLT645 DI={diKey} RawData={BitConverter.ToString(dataBytes).Replace("-", " ")}");
+                LogDebug($"Device:[{_device}] DLT645 DI={diKey} RawData={BitConverter.ToString(dataBytes).Replace("-", " ")}");
 
-                // 如果需要严格校验 DI 一致性，这里可以比对
+                // DI 不一致告警
                 if (!respDi.SequenceEqual(diBytes))
                 {
-                    _logger?.LogWarning(
+                    LogWarn(
                         $"Device:[{_device}] DLT645 DI不一致: 请求={BitConverter.ToString(diBytes)} 响应={BitConverter.ToString(respDi)}");
                 }
 
@@ -419,6 +471,7 @@ namespace Meter.Dlt645
                     || ioArg.ValueType == DataTypeEnum.Gb2312String)
                 {
                     ret.Value = DecodeString(ioArg.ValueType, dataBytes);
+                    LogInfo($"Device:[{_device}] DLT645 Read OK (String) DI={diKey} Value={ret.Value}");
                     return ret;
                 }
 
@@ -432,38 +485,43 @@ namespace Meter.Dlt645
                     scaledNumber = rawNumber / Math.Pow(10, decimalPlaces);
                 }
 
-                _logger?.LogInformation(
+                LogDebug(
                     $"Device:[{_device}] DLT645 数值解码: DI={diKey} 原始={rawNumber} 小数位={decimalPlaces} 最终={scaledNumber}");
+
+                object? finalValue;
 
                 switch (ioArg.ValueType)
                 {
                     case DataTypeEnum.Float:
-                        ret.Value = (float)scaledNumber;
+                        finalValue = (float)scaledNumber;
                         break;
                     case DataTypeEnum.Int16:
-                        ret.Value = (short)scaledNumber;
+                        finalValue = (short)scaledNumber;
                         break;
                     case DataTypeEnum.Int32:
-                        ret.Value = (int)scaledNumber;
+                        finalValue = (int)scaledNumber;
                         break;
                     case DataTypeEnum.Uint16:
-                        ret.Value = (ushort)Math.Max(0, scaledNumber);
+                        finalValue = (ushort)Math.Max(0, scaledNumber);
                         break;
                     case DataTypeEnum.Uint32:
-                        ret.Value = (uint)Math.Max(0, scaledNumber);
+                        finalValue = (uint)Math.Max(0, scaledNumber);
                         break;
                     case DataTypeEnum.Double:
                     case DataTypeEnum.Int64:
-                        ret.Value = scaledNumber;
+                        finalValue = scaledNumber;
                         break;
                     default:
-                        // 未知类型就直接返回 double
-                        ret.Value = scaledNumber;
+                        finalValue = scaledNumber;
                         break;
                 }
+
+                ret.Value = finalValue;
+                LogInfo($"Device:[{_device}] DLT645 Read OK DI={diKey} Value={finalValue}");
             }
             catch (Exception ex)
             {
+                LogError(ex, $"Device:[{_device}] Read(),Error");
                 ret.StatusType = VaribaleStatusTypeEnum.Bad;
                 ret.Message = $"读取失败,{ex.Message}";
             }
@@ -492,6 +550,7 @@ namespace Meter.Dlt645
             }
             catch (Exception ex)
             {
+                LogError(ex, $"Device:[{_device}] WriteAsync(),Error");
                 rpcResponse.Description = $"写入失败,[method]:{method},[ioArg]:{ioArg},[ex]:{ex}";
             }
 
@@ -519,7 +578,7 @@ namespace Meter.Dlt645
                     _serial.DiscardInBuffer();
                     var sendBytes = wakeup.Concat(frame).ToArray();
                     _serial.Write(sendBytes, 0, sendBytes.Length);
-                    _logger?.LogInformation($"Device:[{_device}] DLT645 Send: {ToHex(sendBytes)}");
+                    LogDebug($"Device:[{_device}] DLT645 Send: {ToHex(sendBytes)}");
 
                     var buf = new List<byte>();
                     var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -544,22 +603,22 @@ namespace Meter.Dlt645
 
                     if (buf.Count == 0)
                     {
-                        _logger?.LogWarning($"Device:[{_device}] DLT645 无任何返回");
+                        LogWarn($"Device:[{_device}] DLT645 无任何返回");
                         return null;
                     }
 
                     var resp = buf.ToArray();
-                    _logger?.LogInformation($"Device:[{_device}] DLT645 Recv({resp.Length}): {ToHex(resp)}");
+                    LogDebug($"Device:[{_device}] DLT645 Recv({resp.Length}): {ToHex(resp)}");
                     return resp;
                 }
                 catch (TimeoutException)
                 {
-                    _logger?.LogWarning($"Device:[{_device}] DLT645 读取超时");
+                    LogWarn($"Device:[{_device}] DLT645 读取超时");
                     return null;
                 }
                 catch (Exception ex)
                 {
-                    _logger?.LogError(ex, $"Device:[{_device}] DLT645 通讯异常");
+                    LogError(ex, $"Device:[{_device}] DLT645 通讯异常");
                     return null;
                 }
             }
@@ -573,7 +632,7 @@ namespace Meter.Dlt645
                     var sendBytes = wakeup.Concat(frame).ToArray();
                     _netStream.Write(sendBytes, 0, sendBytes.Length);
                     _netStream.Flush();
-                    _logger?.LogInformation($"Device:[{_device}] DLT645(TCP) Send: {ToHex(sendBytes)}");
+                    LogDebug($"Device:[{_device}] DLT645(TCP) Send: {ToHex(sendBytes)}");
 
                     var buf = new List<byte>();
                     var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -600,22 +659,22 @@ namespace Meter.Dlt645
 
                     if (buf.Count == 0)
                     {
-                        _logger?.LogWarning($"Device:[{_device}] DLT645(TCP) 无任何返回");
+                        LogWarn($"Device:[{_device}] DLT645(TCP) 无任何返回");
                         return null;
                     }
 
                     var resp = buf.ToArray();
-                    _logger?.LogInformation($"Device:[{_device}] DLT645(TCP) Recv({resp.Length}): {ToHex(resp)}");
+                    LogDebug($"Device:[{_device}] DLT645(TCP) Recv({resp.Length}): {ToHex(resp)}");
                     return resp;
                 }
                 catch (TimeoutException)
                 {
-                    _logger?.LogWarning($"Device:[{_device}] DLT645(TCP) 读取超时");
+                    LogWarn($"Device:[{_device}] DLT645(TCP) 读取超时");
                     return null;
                 }
                 catch (Exception ex)
                 {
-                    _logger?.LogError(ex, $"Device:[{_device}] DLT645(TCP) 通讯异常");
+                    LogError(ex, $"Device:[{_device}] DLT645(TCP) 通讯异常");
                     return null;
                 }
             }
@@ -691,7 +750,7 @@ namespace Meter.Dlt645
                 Array.Copy(resp, start + 1, addr, 0, 6);
                 if (!addr.SequenceEqual(expectedAddr))
                 {
-                    _logger?.LogWarning(
+                    LogWarn(
                         $"Device:[{_device}] DLT645 响应地址与请求不一致: Req={ToHex(expectedAddr)} Resp={ToHex(addr)}");
                 }
 
@@ -737,6 +796,7 @@ namespace Meter.Dlt645
             }
             catch (Exception ex)
             {
+                LogError(ex, $"Device:[{_device}] TryParseResponse(),Error");
                 err = $"解析异常: {ex.Message}";
                 return false;
             }
